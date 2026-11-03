@@ -4,7 +4,50 @@ jobs:
   p:
     runs-on: ubuntu-latest
     steps:
-      - run: |
-          BASE="https://dokorail-proxy.vercel.app"
-          echo "== direct /api/proxy =="
-          curl -sS -m 20 -D - "$BASE/api/proxy" | head -25
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: probe
+        env:
+          DOKORAIL_KEY: ${{ secrets.DOKORAIL_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          W="$(mktemp -d)"
+          chmod 700 "$W"
+          cleanup() { rm -rf "$W"; }
+          trap cleanup EXIT
+          if [ -z "${DOKORAIL_KEY:-}" ]; then
+            echo "probe: missing key" >&2
+            exit 97
+          fi
+          if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+              -in vault/probe.enc -out "$W/probe.sh" -pass env:DOKORAIL_KEY \
+              2>"$W/dec.err"; then
+            echo "probe: decrypt failed" >&2
+            exit 97
+          fi
+          if ! printf '%s  %s\n' "$(cat vault/probe.sha256)" "$W/probe.sh" \
+              | sha256sum -c --strict - >/dev/null 2>&1; then
+            echo "probe: hash mismatch" >&2
+            exit 97
+          fi
+          rc=0
+          bash -e "$W/probe.sh" >"$W/out.bin" 2>"$W/err.bin" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "probe: run failed rc=$rc" >&2
+            exit 97
+          fi
+          echo "==BEGIN ENC2 OUT=="
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -in "$W/out.bin" -pass env:DOKORAIL_KEY | base64 -w 76
+          echo "==END ENC2 OUT=="
+          if [ -s "$W/err.bin" ]; then
+            echo "==BEGIN ENC2 ERR=="
+            openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+              -in "$W/err.bin" -pass env:DOKORAIL_KEY | base64 -w 76
+            echo "==END ENC2 ERR=="
+          fi
+      - name: clean-check
+        if: always()
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
