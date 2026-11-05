@@ -1,53 +1,37 @@
 name: probe-direct
+
+# 加密（2026-11 迁移）：探针脚本原以 openssl/DOKORAIL_KEY 存于 vault/probe.enc，
+# 现迁入统一机制（encrypted/*.enc + encryption/manifest.tsv，OOEP02，CODE_KEY）。
+# 明文经 sha256 对照（5feaf670…）后迁移，行为逐字节一致。
+# 输出经 logrun hybrid（SEALED_LOG=1）：STEP 状态 + 定长密文块，本地用
+# `OOEP_PASSPHRASE=<CODE_KEY> python3 encryption/logseal.py unseal` 还原。
+# 旧机制文件 vault/probe.enc 与 vault/probe.sha256 随本迁移删除。
+# workflow YAML 本身无法加密（GitHub 只从明文 YAML 调度）。
+
 on: workflow_dispatch
+
 jobs:
   p:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: probe
+
+      - name: Step 1/3 verify ciphertext (verify-only, zero writes)
         env:
-          DOKORAIL_KEY: ${{ secrets.DOKORAIL_KEY }}
-        run: |
-          set -euo pipefail
-          umask 077
-          W="$(mktemp -d)"
-          chmod 700 "$W"
-          cleanup() { rm -rf "$W"; }
-          trap cleanup EXIT
-          if [ -z "${DOKORAIL_KEY:-}" ]; then
-            echo "probe: missing key" >&2
-            exit 97
-          fi
-          if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
-              -in vault/probe.enc -out "$W/probe.sh" -pass env:DOKORAIL_KEY \
-              2>"$W/dec.err"; then
-            echo "probe: decrypt failed" >&2
-            exit 97
-          fi
-          if ! printf '%s  %s\n' "$(cat vault/probe.sha256)" "$W/probe.sh" \
-              | sha256sum -c --strict - >/dev/null 2>&1; then
-            echo "probe: hash mismatch" >&2
-            exit 97
-          fi
-          rc=0
-          bash -e "$W/probe.sh" >"$W/out.bin" 2>"$W/err.bin" || rc=$?
-          if [ "$rc" -ne 0 ]; then
-            echo "probe: run failed rc=$rc" >&2
-            exit 97
-          fi
-          echo "==BEGIN ENC2 OUT=="
-          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
-            -in "$W/out.bin" -pass env:DOKORAIL_KEY | base64 -w 76
-          echo "==END ENC2 OUT=="
-          if [ -s "$W/err.bin" ]; then
-            echo "==BEGIN ENC2 ERR=="
-            openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
-              -in "$W/err.bin" -pass env:DOKORAIL_KEY | base64 -w 76
-            echo "==END ENC2 ERR=="
-          fi
-      - name: clean-check
+          OOEP_PASSPHRASE: ${{ secrets.CODE_KEY }}
+        run: bash encryption/logrun.sh 1/3 bash encryption/prep.sh 1
+
+      - name: Step 2/3 materialize
+        env:
+          OOEP_PASSPHRASE: ${{ secrets.CODE_KEY }}
+        run: bash encryption/logrun.sh 2/3 bash encryption/prep.sh 2
+
+      - name: Step 3/3 probe
+        env:
+          OOEP_PASSPHRASE: ${{ secrets.CODE_KEY }}
+          SEALED_LOG: "1"
+        run: bash encryption/logrun.sh 3/3 bash ci/step.sh probe 3
+
+      - name: Finalize (cleanup + worktree assertion)
         if: always()
-        run: |
-          git status --porcelain
-          test -z "$(git status --porcelain)"
+        run: bash encryption/finalize.sh
