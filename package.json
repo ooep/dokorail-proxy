@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Vercel serverless reverse proxy for dokorail.jp (bypasses Cloudflare blocks on GitHub Actions runner egress)",
+  "description": "Vercel serverless reverse proxy (upstream injected via UPSTREAM env var; bypasses Cloudflare blocks on GitHub Actions runner egress)",
   "engines": { "node": ">=18" }
 }

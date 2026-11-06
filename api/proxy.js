@@ -1,7 +1,9 @@
-// dokorail-proxy: Vercel edge reverse proxy for dokorail.jp
+// dokorail-proxy: Vercel edge reverse proxy.
+// Upstream is injected by the deploy side via the UPSTREAM env var (no default).
 // Mirrors baker/common.py http_get: UA + X-Train-Search only, no extras.
 
-const UPSTREAM = process.env.UPSTREAM || "https://dokorail.jp";
+// 部署侧必配（Vercel → Project → Settings → Environment Variables）；无默认值。
+const UPSTREAM = process.env.UPSTREAM;
 
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -22,6 +24,15 @@ function cacheControlFor(pathname) {
 
 export default async function handler(req) {
   try {
+    if (!UPSTREAM) {
+      return new Response(
+        JSON.stringify({
+          error: "upstream_not_configured",
+          detail: "set the UPSTREAM env var on the deploy side",
+        }),
+        { status: 500, headers: { "content-type": "application/json" } }
+      );
+    }
     const url = new URL(req.url, "https://proxy.local");
     const isApi = url.pathname.startsWith("/api/");
 
@@ -30,7 +41,7 @@ export default async function handler(req) {
       "user-agent": BROWSER_UA,
       accept: "application/json, text/plain, */*",
       "accept-language": "ja,en;q=0.9",
-      referer: "https://dokorail.jp/app/",
+      referer: UPSTREAM + "/app/",
     };
     if (isApi) headers["x-train-search"] = "1";
 
